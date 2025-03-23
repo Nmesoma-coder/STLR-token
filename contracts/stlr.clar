@@ -185,3 +185,63 @@
                 })
             (ok true))))
 
+(define-public (transfer (amount uint) (recipient principal))
+    (begin
+        (asserts! (> amount u0) ERR-INVALID-AMOUNT)
+        (asserts! (is-valid-recipient recipient) ERR-INVALID-RECIPIENT)
+        (try! (check-initialized))
+        (try! (check-not-paused))
+        (asserts! (not (is-locked tx-sender)) ERR-NOT-AUTHORIZED)
+        
+        (let ((sender-balance (unwrap! (get-balance tx-sender) ERR-INSUFFICIENT-BALANCE)))
+            (asserts! (>= sender-balance amount) ERR-INSUFFICIENT-BALANCE)
+            
+            (try! (ft-transfer? stellar amount tx-sender recipient))
+            
+            (map-set governance-tokens
+                { holder: tx-sender }
+                { 
+                    voting-power: (- sender-balance amount),
+                    last-vote-height: block-height 
+                })
+                
+            (map-set governance-tokens
+                { holder: recipient }
+                { 
+                    voting-power: (unwrap! (safe-add 
+                        (default-to u0 (get voting-power (map-get? governance-tokens { holder: recipient }))) 
+                        amount) ERR-OVERFLOW),
+                    last-vote-height: block-height 
+                })
+            (ok true))))
+
+(define-public (approve (amount uint) (spender principal) (expiry uint))
+    (begin
+        (asserts! (> amount u0) ERR-INVALID-AMOUNT)
+        (asserts! (not (is-eq spender tx-sender)) ERR-INVALID-SPENDER)
+        (asserts! (>= expiry block-height) ERR-EXPIRED-ALLOWANCE)
+        (try! (check-initialized))
+        (try! (check-not-paused))
+        
+        (map-set allowances
+            { owner: tx-sender, spender: spender }
+            { amount: amount, expiry: expiry })
+        (ok true)))
+
+;; Events
+(define-data-var last-event-id uint u0)
+
+(define-private (emit-transfer-event (from principal) (to principal) (amount uint))
+    (begin
+        (var-set last-event-id (+ (var-get last-event-id) u1))
+        (print { type: "transfer", id: (var-get last-event-id), from: from, to: to, amount: amount })))
+
+(define-private (emit-mint-event (to principal) (amount uint))
+    (begin
+        (var-set last-event-id (+ (var-get last-event-id) u1))
+        (print { type: "mint", id: (var-get last-event-id), to: to, amount: amount })))
+
+(define-private (emit-burn-event (from principal) (amount uint))
+    (begin
+        (var-set last-event-id (+ (var-get last-event-id) u1))
+        (print { type: "burn", id: (var-get last-event-id), from: from, amount: amount })))
